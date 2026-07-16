@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 *.pyo
-*.pkl
 .DS_Store
 thumbs.db
 .vscode/
@@ -12,3 +11,7 @@ venv/
 .venv/
 data/train/
 data/test/
+*.pth
+*.task
+!models/landmark_mlp.pth
+!models/best_model.pkl

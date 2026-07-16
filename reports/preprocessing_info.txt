@@ -1,0 +1,19 @@
+
+PREPROCESSING PIPELINE
+======================
+1. Load X.npy (63 landmark features) and y.npy (labels)
+2. Filter: keep only samples with hand detected (non-zero rows)
+   - Retained: 18109 / 87028 samples (20.8%)
+   - Removed: 68919 samples (no hand detected)
+3. Train/Validation split: 85% / 15% (stratified)
+   - Training: 15392 samples
+   - Validation: 2717 samples
+4. StandardScaler: normalize features to zero mean, unit variance
+5. No encoding needed (labels already integers 0-28)
+6. No missing value imputation (undetected = removed)
+
+Justifikasi:
+- Filter: menghindari noise dari samples tanpa hand detection
+- Stratified split: menjaga proporsi kelas di train dan val
+- StandardScaler: mempercepat konvergensi MLP (fitur dalam range berbeda)
+- Tidak imputasi: samples tanpa detection tidak informatif untuk training
