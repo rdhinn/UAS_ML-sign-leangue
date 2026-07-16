@@ -13,5 +13,8 @@ data/train/
 data/test/
 *.pth
 *.task
+*.pkl
 !models/landmark_mlp.pth
-!models/best_model.pkl
+!models/xgb_model.pkl
+!models/scaler.pkl
+!models/class_map.pkl
