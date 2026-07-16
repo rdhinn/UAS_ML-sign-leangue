@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pkl
+.DS_Store
+thumbs.db
+.vscode/
+.idea/
+*.egg-info/
+env/
+venv/
+.venv/
+data/train/
+data/test/
