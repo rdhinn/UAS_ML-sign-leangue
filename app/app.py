@@ -3,12 +3,14 @@ UAS - ASL Sign Language Recognition Web App
 Deploy: streamlit run app/app.py
 """
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
+import base64
 from PIL import Image
 import time
 import joblib
@@ -157,44 +159,79 @@ if "Dashboard" in page:
 
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
-    st.title("🧪 Webcam Demo - Prediksi Real-time")
-    st.markdown("Ambil gambar dari webcam browser untuk prediksi ASL.")
+    st.title("🧪 Webcam Real-time - ASL Prediction")
+    st.markdown("Webcam otomatis menangkap frame setiap 3 detik untuk prediksi.")
 
     model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"])
-    img = st.camera_input("Ambil gambar")
 
-    if img is not None:
-        frame = np.array(Image.open(io.BytesIO(img.getvalue())).convert('RGB'))
+    html_code = """
+    <div id="container" style="text-align:center;font-family:sans-serif;">
+        <video id="video" width="480" height="360" autoplay playsinline
+               style="border-radius:8px;border:2px solid #4C72B0;"></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+        <p id="status" style="color:#666;font-size:13px;margin-top:6px;">Mengakses kamera...</p>
+    </div>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+
+        navigator.mediaDevices.getUserMedia({ video: { width:480, height:360 } })
+            .then(stream => {
+                video.srcObject = stream;
+                status.textContent = 'Kamera aktif — capture otomatis tiap 3 detik';
+            })
+            .catch(err => {
+                status.innerHTML = '<span style="color:red;">Kamera tidak dapat diakses: ' + err.message + '</span>';
+            });
+
+        setInterval(() => {
+            if (video.videoWidth > 0) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                Streamlit.setComponentValue(dataUrl);
+            }
+        }, 3000);
+
+        Streamlit.setComponentReady();
+    </script>
+    """
+
+    img_data = components.html(html_code, height=420, key="webcam-live")
+
+    if img_data and isinstance(img_data, str) and img_data.startswith('data:image'):
+        _, encoded = img_data.split(",", 1)
+        frame = np.array(Image.open(io.BytesIO(base64.b64decode(encoded))).convert('RGB'))
 
         col1, col2 = st.columns(2)
         with col1:
-            st.image(frame, caption="Gambar dari webcam", width=320)
+            st.image(frame, caption="Frame Webcam", width=320)
 
         with col2:
-            with st.spinner("Mendeteksi landmark tangan..."):
-                detector = get_detector()
-                features = extract_landmarks_fast(frame, detector) if detector else None
+            detector = get_detector()
+            features = extract_landmarks_fast(frame, detector) if detector else None
 
             if features is not None:
                 pred, probs = predict_landmarks(features, model_choice)
-                label = CLASSES[pred]
                 confidence = probs[pred]
 
-                st.success(f"**Prediksi: {label}**")
+                st.success(f"**Prediksi: {CLASSES[pred]}**")
                 st.metric("Confidence", f"{confidence*100:.1f}%")
 
                 if confidence < 0.6:
-                    st.warning("Confidence rendah — coba dengan pencahayaan lebih baik")
+                    st.warning("Confidence rendah — coba pencahayaan lebih baik")
 
                 top3 = np.argsort(probs)[-3:][::-1]
-                st.write("**Top-3 Prediksi:**")
+                st.write("**Top-3:**")
                 for i, idx in enumerate(top3):
                     pct = probs[idx] * 100
                     bar = "█" * int(pct / 5)
                     st.write(f"{i+1}. **{CLASSES[idx]}**: {pct:.1f}% {bar}")
             else:
-                st.error("Tidak ada tangan terdeteksi. Coba posisikan tangan di depan kamera.")
-                st.info("Tips: gunakan background polos, pencahayaan cukup, tangan di tengah frame.")
+                st.error("Tangan tidak terdeteksi. Posisikan tangan di depan kamera.")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
