@@ -3,7 +3,6 @@ UAS - ASL Sign Language Recognition Web App
 Deploy: streamlit run app/app.py
 """
 import streamlit as st
-import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -146,78 +145,48 @@ if "Dashboard" in page:
     tab1, tab2, tab3 = st.tabs(["Distribusi Kelas", "Sample Gambar", "Ringkasan"])
     with tab1:
         st.image(str(BASE_DIR / "1_eksplorasi_dataset/images/class_distribution.png"),
-                 caption="Distribusi 29 kelas ASL", use_container_width=True)
+                 caption="Distribusi 29 kelas ASL", width='stretch')
     with tab2:
         st.image(str(BASE_DIR / "1_eksplorasi_dataset/images/sample_grid.png"),
-                 caption="Sample per kelas", use_container_width=True)
+                 caption="Sample per kelas", width='stretch')
     with tab3:
         st.image(str(BASE_DIR / "1_eksplorasi_dataset/images/dataset_info.png"),
-                 caption="Informasi dataset", use_container_width=True)
+                 caption="Informasi dataset", width='stretch')
     st.subheader("Analisis Landmark")
-    st.image(str(BASE_DIR / "reports/eda_summary.png"), use_container_width=True)
+    st.image(str(BASE_DIR / "reports/eda_summary.png"), width='stretch')
 
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
     st.title("🧪 Webcam Real-time - ASL Prediction")
-    st.markdown("Webcam otomatis — tunjukkan gestur, prediksi muncul.")
+    st.markdown("Ambil gambar gestur ASL — prediksi muncul instan.")
 
     model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
 
     if "wc_last" not in st.session_state:
         st.session_state.wc_last = None
 
-    html_code = """
-    <div style="text-align:center;font-family:sans-serif;">
-        <video id="v" width="320" height="240" autoplay playsinline
-               style="border-radius:8px;border:2px solid #4C72B0;background:#000;"></video>
-        <p id="s" style="color:#888;font-size:13px;margin:6px 0;">Mengakses kamera...</p>
-    </div>
-    <script>
-    const v = document.getElementById('v');
-    const s = document.getElementById('s');
-    navigator.mediaDevices.getUserMedia({video:{width:320,height:240}})
-        .then(stream => { v.srcObject = stream; s.textContent = 'Kamera aktif'; })
-        .catch(e => { s.innerHTML = '<span style=color:red>Kamera tidak bisa diakses</span>'; });
-    setInterval(() => {
-        if (v.videoWidth > 0) {
-            const c = document.createElement('canvas');
-            c.width = v.videoWidth; c.height = v.videoHeight;
-            c.getContext('2d').drawImage(v, 0, 0);
-            Streamlit.setComponentValue(c.toDataURL('image/jpeg', 0.6));
-        }
-    }, 2000);
-    Streamlit.setComponentReady();
-    </script>
-    """
+    img_input = st.camera_input("Ambil gestur ASL", key="wc_cam")
 
-    img_data = st.components.v1.html(html_code, height=300)
-
-    if img_data and isinstance(img_data, str):
-        try:
-            _, enc = img_data.split(",", 1)
-            frame = np.array(Image.open(io.BytesIO(__import__('base64').b64decode(enc))).convert('RGB'))
-            st.image(frame, caption="Frame", width=240)
-            st.write(f"Frame shape: {frame.shape}, dtype: {frame.dtype}")
-            detector = get_detector()
-            if detector is None:
-                st.error("Detector gagal dimuat")
+    if img_input is not None:
+        frame = np.array(Image.open(io.BytesIO(img_input.getvalue())).convert('RGB'))
+        detector = get_detector()
+        if detector:
+            features = extract_landmarks_fast(frame, detector)
+            if features is not None:
+                pred, probs = predict_landmarks(features, model_choice)
+                conf = probs[pred]
+                st.session_state.wc_last = (CLASSES[pred], conf)
+                st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
+                if conf < 0.6:
+                    st.warning("Confidence rendah, coba pencahayaan lebih baik")
             else:
-                features = extract_landmarks_fast(frame, detector)
-                st.write(f"Features: {features.shape if features is not None else 'None'}")
-                if features is not None:
-                    pred, probs = predict_landmarks(features, model_choice)
-                    conf = probs[pred]
-                    st.session_state.wc_last = (CLASSES[pred], conf)
-                    st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
-                else:
-                    st.warning("Tangan tidak terdeteksi")
-        except Exception as e:
-            st.error(f"Error: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-    if st.session_state.wc_last:
+                st.warning("Tangan tidak terdeteksi")
+        else:
+            st.error("Detector gagal dimuat")
+
+    if st.session_state.wc_last and img_input is None:
         label, conf = st.session_state.wc_last
-        st.caption(f"Prediksi terakhir: {label} ({conf*100:.1f}%)")
+        st.info(f"Klik kamera untuk prediksi baru. Terakhir: **{label}** ({conf*100:.1f}%)")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
@@ -278,7 +247,7 @@ elif "Evaluasi" in page:
         df = pd.read_csv(str(BASE_DIR / "reports/model_comparison.csv"))
         st.subheader("Perbandingan Performa")
         st.dataframe(df.style.highlight_max(subset=['Accuracy', 'F1-Score (macro)']),
-                     use_container_width=True)
+                     width='stretch')
 
         fig, ax = plt.subplots(figsize=(12, 5))
         metrics = ['Accuracy', 'Precision (macro)', 'Recall (macro)', 'F1-Score (macro)']
@@ -301,15 +270,15 @@ elif "Evaluasi" in page:
     with col1:
         st.subheader("Confusion Matrix")
         if Path(str(BASE_DIR / "reports/confusion_matrix.png")).exists():
-            st.image(str(BASE_DIR / "reports/confusion_matrix.png"), use_container_width=True)
+            st.image(str(BASE_DIR / "reports/confusion_matrix.png"), width='stretch')
     with col2:
         st.subheader("Feature Importance")
         if Path(str(BASE_DIR / "reports/feature_importance.png")).exists():
-            st.image(str(BASE_DIR / "reports/feature_importance.png"), use_container_width=True)
+            st.image(str(BASE_DIR / "reports/feature_importance.png"), width='stretch')
 
     st.subheader("SHAP Analysis")
     if Path(str(BASE_DIR / "reports/shap_summary.png")).exists():
-        st.image(str(BASE_DIR / "reports/shap_summary.png"), use_container_width=True)
+        st.image(str(BASE_DIR / "reports/shap_summary.png"), width='stretch')
 
 # ─── PAGE 5: INTERPRETASI ──────────────────────────────
 elif "Interpretasi" in page:
