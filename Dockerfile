@@ -6,8 +6,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
-    mv /usr/local/bin/streamlit /usr/local/bin/streamlit.real && \
-    printf '#!/bin/sh\nunset STREAMLIT_SERVER_PORT\nexec /usr/local/bin/streamlit.real "$@"\n' > /usr/local/bin/streamlit && \
+    rm -f /usr/local/bin/streamlit* && \
+    printf '#!/usr/bin/env python3\nimport os,sys\nos.environ.pop("STREAMLIT_SERVER_PORT",None)\nsys.argv[0]="streamlit"\nfrom streamlit.web.cli import main\nmain()\n' > /usr/local/bin/streamlit && \
     chmod +x /usr/local/bin/streamlit
 
 COPY . .
