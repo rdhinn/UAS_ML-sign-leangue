@@ -3,6 +3,7 @@ UAS - ASL Sign Language Recognition Web App
 Deploy: streamlit run app/app.py
 """
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -158,69 +159,57 @@ if "Dashboard" in page:
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
     st.title("🧪 Webcam Real-time - ASL Prediction")
-    st.markdown("Streaming langsung — gestur ASL diprediksi otomatis.")
+    st.markdown("Webcam otomatis — tunjukkan gestur, prediksi muncul.")
 
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-    import av
+    model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
 
-    RTC_CONFIG = RTCConfiguration({
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    })
+    if "wc_last" not in st.session_state:
+        st.session_state.wc_last = None
 
-    class ASLProcessor:
-        def __init__(self):
-            self.detector = None
-            self.scaler = None
-            self.model = None
-            self.cmap = None
-            self.count = 0
+    html_code = """
+    <div style="text-align:center;font-family:sans-serif;">
+        <video id="v" width="320" height="240" autoplay playsinline
+               style="border-radius:8px;border:2px solid #4C72B0;background:#000;"></video>
+        <p id="s" style="color:#888;font-size:13px;margin:6px 0;">Mengakses kamera...</p>
+    </div>
+    <script>
+    const v = document.getElementById('v');
+    const s = document.getElementById('s');
+    navigator.mediaDevices.getUserMedia({video:{width:320,height:240}})
+        .then(stream => { v.srcObject = stream; s.textContent = 'Kamera aktif'; })
+        .catch(e => { s.innerHTML = '<span style=color:red>Kamera tidak bisa diakses</span>'; });
+    setInterval(() => {
+        if (v.videoWidth > 0) {
+            const c = document.createElement('canvas');
+            c.width = v.videoWidth; c.height = v.videoHeight;
+            c.getContext('2d').drawImage(v, 0, 0);
+            Streamlit.setComponentValue(c.toDataURL('image/jpeg', 0.6));
+        }
+    }, 2000);
+    Streamlit.setComponentReady();
+    </script>
+    """
 
-        def init_once(self):
-            if self.detector is not None:
-                return
-            self.detector = get_detector()
-            self.scaler = load_scaler()
-            self.model = load_xgboost()
-            self.cmap = load_class_map()
+    img_data = st.components.v1.html(html_code, height=300)
 
-        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-            self.init_once()
-            self.count += 1
-            img = frame.to_ndarray(format="bgr24")
-
-            label = ""
-            conf = 0.0
-            if self.count % 3 == 0:
-                features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
-                if features is not None:
-                    fs = self.scaler.transform(features.reshape(1, -1))
-                    pm = self.model.predict(fs)[0]
-                    pred = self.cmap['present_classes'][pm]
-                    pmb = self.model.predict_proba(fs)[0]
-                    label = CLASSES[pred]
-                    conf = float(pmb[pm])
-
-            if label:
-                overlay = Image.fromarray(img[:, :, ::-1])
-                draw = ImageDraw.Draw(overlay)
-                draw.rectangle([(4, 4), (overlay.width - 5, 28)], fill=(0, 0, 0, 180))
-                color = (0, 255, 0) if conf >= 0.6 else (255, 200, 0)
-                draw.text((10, 8), f"{label}  {conf*100:.0f}%", fill=color)
-                img = np.array(overlay)[:, :, ::-1]
-
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-    webrtc_streamer(
-        key="asl-webcam",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={
-            "video": {"width": {"ideal": 320}, "height": {"ideal": 240}},
-            "audio": False,
-        },
-        video_processor_factory=ASLProcessor,
-        async_processing=True,
-    )
+    if img_data and isinstance(img_data, str):
+        try:
+            _, enc = img_data.split(",", 1)
+            frame = np.array(Image.open(io.BytesIO(__import__('base64').b64decode(enc))).convert('RGB'))
+            detector = get_detector()
+            features = extract_landmarks_fast(frame, detector) if detector else None
+            if features is not None:
+                pred, probs = predict_landmarks(features, model_choice)
+                conf = probs[pred]
+                st.session_state.wc_last = (CLASSES[pred], conf)
+                st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
+            else:
+                st.warning("Tangan tidak terdeteksi")
+        except Exception as e:
+            st.error(f"Error: {e}")
+    elif st.session_state.wc_last:
+        label, conf = st.session_state.wc_last
+        st.info(f"Menunggu gestur... Prediksi terakhir: {label} ({conf*100:.1f}%)")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
