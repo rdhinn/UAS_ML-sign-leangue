@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
-from PIL import Image
+from PIL import Image, ImageDraw
 import time
 import joblib
 from pathlib import Path
@@ -160,8 +160,6 @@ elif "Webcam" in page:
     st.title("🧪 Webcam Real-time - ASL Prediction")
     st.markdown("Streaming langsung — gestur ASL diprediksi otomatis.")
 
-    _wc_result = {"label": "", "conf": 0.0, "hand": False}
-
     from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
     import av
 
@@ -190,6 +188,8 @@ elif "Webcam" in page:
             self.count += 1
             img = frame.to_ndarray(format="bgr24")
 
+            label = ""
+            conf = 0.0
             if self.count % 3 == 0:
                 features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
                 if features is not None:
@@ -197,39 +197,30 @@ elif "Webcam" in page:
                     pm = self.model.predict(fs)[0]
                     pred = self.cmap['present_classes'][pm]
                     pmb = self.model.predict_proba(fs)[0]
-                    _wc_result["label"] = CLASSES[pred]
-                    _wc_result["conf"] = float(pmb[pm])
-                    _wc_result["hand"] = True
-                else:
-                    _wc_result["hand"] = False
+                    label = CLASSES[pred]
+                    conf = float(pmb[pm])
 
-            return frame
+            if label:
+                overlay = Image.fromarray(img[:, :, ::-1])
+                draw = ImageDraw.Draw(overlay)
+                draw.rectangle([(4, 4), (overlay.width - 5, 28)], fill=(0, 0, 0, 180))
+                color = (0, 255, 0) if conf >= 0.6 else (255, 200, 0)
+                draw.text((10, 8), f"{label}  {conf*100:.0f}%", fill=color)
+                img = np.array(overlay)[:, :, ::-1]
+
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
 
     webrtc_streamer(
         key="asl-webcam",
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={
-            "video": {"width": {"ideal": 240}, "height": {"ideal": 180}},
+            "video": {"width": {"ideal": 320}, "height": {"ideal": 240}},
             "audio": False,
         },
         video_processor_factory=ASLProcessor,
         async_processing=True,
     )
-
-    @st.fragment(run_every=1.0)
-    def show_prediction():
-        st.subheader("Hasil Prediksi")
-        if _wc_result["hand"]:
-            conf = _wc_result["conf"]
-            st.markdown(f"### {_wc_result['label']}")
-            st.metric("Confidence", f"{conf*100:.1f}%")
-            if conf < 0.6:
-                st.warning("Confidence rendah")
-        else:
-            st.info("Tunjukkan gestur ASL di depan kamera")
-
-    show_prediction()
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
