@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import os
-import sys
 
 os.environ.pop("STREAMLIT_SERVER_PORT", None)
-port = int(os.environ.get("PORT", 8501))
+
+try:
+    port = int(os.environ.get("PORT", 8501))
+except (ValueError, TypeError):
+    port = 8501
+
 os.environ["STREAMLIT_SERVER_PORT"] = str(port)
 
 from streamlit.web import bootstrap
