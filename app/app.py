@@ -14,10 +14,16 @@ import time
 import joblib
 from pathlib import Path
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+import sys
+import types
+
+class _Cv2Proxy(types.ModuleType):
+    def __getattr__(self, name):
+        return _Cv2Proxy(f"cv2.{name}")
+
+if 'cv2' not in sys.modules:
+    sys.modules['cv2'] = _Cv2Proxy('cv2')
+    sys.modules['cv2'].__version__ = '0.0.0'
 
 st.set_page_config(page_title="ASL Recognition", layout="wide", page_icon="🤟")
 
