@@ -148,89 +148,46 @@ if "Dashboard" in page:
 
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
-    st.title("🧪 Webcam Real-time - ASL Prediction")
-    st.markdown("Webcam langsung dengan deteksi gestur ASL via MediaPipe.")
+    st.title("🧪 Webcam Demo - Prediksi Real-time")
+    st.markdown("Ambil gambar dari webcam browser untuk prediksi ASL.")
 
     model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"])
+    img = st.camera_input("Ambil gambar")
 
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-    import av
+    if img is not None:
+        bytes_data = img.getvalue()
+        nparr = np.frombuffer(bytes_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    RTC_CONFIG = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(frame, channels="BGR", caption="Gambar dari webcam", width=320)
 
-    _frame_count = 0
+        with col2:
+            with st.spinner("Mendeteksi landmark tangan..."):
+                detector = get_detector()
+                features = extract_landmarks_fast(frame, detector) if detector else None
 
-    class ASLProcessor:
-        def __init__(self):
-            self.detector = None
-            self.scaler = None
-            self.model = None
-            self.cmap = None
-            self.frame_no = 0
-            self.last_label = ""
-            self.last_conf = 0.0
-            self.last_hand = False
+            if features is not None:
+                pred, probs = predict_landmarks(features, model_choice)
+                label = CLASSES[pred]
+                confidence = probs[pred]
 
-        def init_once(self):
-            if self.detector is not None:
-                return
-            self.detector = get_detector()
-            self.scaler = load_scaler()
-            self.model = load_xgboost()
-            self.cmap = load_class_map()
+                st.success(f"**Prediksi: {label}**")
+                st.metric("Confidence", f"{confidence*100:.1f}%")
 
-        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-            self.init_once()
+                if confidence < 0.6:
+                    st.warning("Confidence rendah — coba dengan pencahayaan lebih baik")
 
-            img = frame.to_ndarray(format="bgr24")
-            self.frame_no += 1
-
-            # Process every 3rd frame; use last result on others
-            if self.frame_no % 3 == 0:
-                features = extract_landmarks_fast(img, self.detector)
-
-                if features is not None:
-                    fs = self.scaler.transform(features.reshape(1, -1))
-                    pm = self.model.predict(fs)[0]
-                    pred = self.cmap['present_classes'][pm]
-                    pmb = self.model.predict_proba(fs)[0]
-                    confidence = pmb[pm]
-                    self.last_label = CLASSES[pred]
-                    self.last_conf = confidence
-                    self.last_hand = True
-                else:
-                    self.last_hand = False
-
-            # Always draw from last known result (no flicker)
-            if self.last_hand:
-                color = (0, 255, 0) if self.last_conf >= 0.6 else (0, 165, 255)
-                cv2.putText(img, f"{self.last_label}", (20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 2.5, color, 4)
-                cv2.putText(img, f"{self.last_conf*100:.1f}%", (20, 120),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
-                if self.last_conf < 0.6:
-                    cv2.putText(img, "(low conf)", (20, 155),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                top3 = np.argsort(probs)[-3:][::-1]
+                st.write("**Top-3 Prediksi:**")
+                for i, idx in enumerate(top3):
+                    pct = probs[idx] * 100
+                    bar = "█" * int(pct / 5)
+                    st.write(f"{i+1}. **{CLASSES[idx]}**: {pct:.1f}% {bar}")
             else:
-                cv2.putText(img, "No hand", (20, 70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
-
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-    col_left, col_mid, col_right = st.columns([0.4, 2.2, 0.4])
-    with col_mid:
-        webrtc_streamer(
-            key="asl-webcam",
-            mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTC_CONFIG,
-            media_stream_constraints={
-                "video": {"width": {"ideal": 1280}, "height": {"ideal": 720}, "frameRate": {"ideal": 30}},
-                "audio": False,
-            },
-            video_processor_factory=ASLProcessor,
-            async_processing=True,
-        )
-    st.info("💡 Klik 'Start' dan ijinkan akses kamera. Tunjukkan gestur ASL di depan kamera.")
+                st.error("Tidak ada tangan terdeteksi. Coba posisikan tangan di depan kamera.")
+                st.info("Tips: gunakan background polos, pencahayaan cukup, tangan di tengah frame.")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
