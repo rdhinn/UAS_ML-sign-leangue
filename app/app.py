@@ -3,14 +3,12 @@ UAS - ASL Sign Language Recognition Web App
 Deploy: streamlit run app/app.py
 """
 import streamlit as st
-import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import io
-import base64
 from PIL import Image
 import time
 import joblib
@@ -160,78 +158,96 @@ if "Dashboard" in page:
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
     st.title("🧪 Webcam Real-time - ASL Prediction")
-    st.markdown("Webcam otomatis menangkap frame setiap 3 detik untuk prediksi.")
+    st.markdown("Webcam langsung — prediksi gestur ASL secara real-time.")
 
-    model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"])
+    model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
 
-    html_code = """
-    <div id="container" style="text-align:center;font-family:sans-serif;">
-        <video id="video" width="480" height="360" autoplay playsinline
-               style="border-radius:8px;border:2px solid #4C72B0;"></video>
-        <canvas id="canvas" style="display:none;"></canvas>
-        <p id="status" style="color:#666;font-size:13px;margin-top:6px;">Mengakses kamera...</p>
-    </div>
-    <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const status = document.getElementById('status');
+    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+    import av
 
-        navigator.mediaDevices.getUserMedia({ video: { width:480, height:360 } })
-            .then(stream => {
-                video.srcObject = stream;
-                status.textContent = 'Kamera aktif — capture otomatis tiap 3 detik';
-            })
-            .catch(err => {
-                status.innerHTML = '<span style="color:red;">Kamera tidak dapat diakses: ' + err.message + '</span>';
-            });
+    RTC_CONFIG = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-        setInterval(() => {
-            if (video.videoWidth > 0) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                ctx.drawImage(video, 0, 0);
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-                Streamlit.setComponentValue(dataUrl);
-            }
-        }, 3000);
+    if "pred_label" not in st.session_state:
+        st.session_state.pred_label = ""
+        st.session_state.pred_conf = 0.0
+        st.session_state.pred_top3 = []
+        st.session_state.hand_detected = False
 
-        Streamlit.setComponentReady();
-    </script>
-    """
+    class ASLProcessor:
+        def __init__(self):
+            self.detector = None
+            self.scaler = None
+            self.model = None
+            self.cmap = None
+            self.frame_no = 0
 
-    img_data = components.html(html_code, height=420)
+        def init_once(self):
+            if self.detector is not None:
+                return
+            self.detector = get_detector()
+            self.scaler = load_scaler()
+            self.model = load_xgboost()
+            self.cmap = load_class_map()
 
-    if img_data and isinstance(img_data, str) and img_data.startswith('data:image'):
-        _, encoded = img_data.split(",", 1)
-        frame = np.array(Image.open(io.BytesIO(base64.b64decode(encoded))).convert('RGB'))
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+            self.init_once()
+            img = frame.to_ndarray(format="bgr24")
+            self.frame_no += 1
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(frame, caption="Frame Webcam", width=320)
+            if self.frame_no % 6 == 0:
+                rgb = img[:, :, ::-1]
+                features = extract_landmarks_fast(rgb, self.detector)
+                if features is not None:
+                    fs = self.scaler.transform(features.reshape(1, -1))
+                    pm = self.model.predict(fs)[0]
+                    pred = self.cmap['present_classes'][pm]
+                    pmb = self.model.predict_proba(fs)[0]
+                    confidence = pmb[pm]
+                    st.session_state.pred_label = CLASSES[pred]
+                    st.session_state.pred_conf = float(confidence)
+                    st.session_state.hand_detected = True
+                    top3_ids = np.argsort(pmb)[-3:][::-1]
+                    st.session_state.pred_top3 = [
+                        (CLASSES[self.cmap['present_classes'][i]], float(pmb[i]))
+                        for i in top3_ids
+                    ]
+                else:
+                    st.session_state.hand_detected = False
 
-        with col2:
-            detector = get_detector()
-            features = extract_landmarks_fast(frame, detector) if detector else None
+            return frame
 
-            if features is not None:
-                pred, probs = predict_landmarks(features, model_choice)
-                confidence = probs[pred]
+    col_vid, col_res = st.columns([2, 1])
+    with col_vid:
+        webrtc_streamer(
+            key="asl-webcam",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTC_CONFIG,
+            media_stream_constraints={
+                "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
+                "audio": False,
+            },
+            video_processor_factory=ASLProcessor,
+            async_processing=True,
+        )
 
-                st.success(f"**Prediksi: {CLASSES[pred]}**")
-                st.metric("Confidence", f"{confidence*100:.1f}%")
-
-                if confidence < 0.6:
-                    st.warning("Confidence rendah — coba pencahayaan lebih baik")
-
-                top3 = np.argsort(probs)[-3:][::-1]
+    with col_res:
+        st.subheader("Hasil Prediksi")
+        if st.session_state.hand_detected:
+            conf = st.session_state.pred_conf
+            color = "🟢" if conf >= 0.6 else "🟡"
+            st.markdown(f"## {color} {st.session_state.pred_label}")
+            st.metric("Confidence", f"{conf*100:.1f}%")
+            if conf < 0.6:
+                st.warning("Confidence rendah")
+            if st.session_state.pred_top3:
                 st.write("**Top-3:**")
-                for i, idx in enumerate(top3):
-                    pct = probs[idx] * 100
+                for i, (label, prob) in enumerate(st.session_state.pred_top3):
+                    pct = prob * 100
                     bar = "█" * int(pct / 5)
-                    st.write(f"{i+1}. **{CLASSES[idx]}**: {pct:.1f}% {bar}")
-            else:
-                st.error("Tangan tidak terdeteksi. Posisikan tangan di depan kamera.")
+                    st.write(f"{i+1}. **{label}**: {pct:.1f}% {bar}")
+        else:
+            st.info("Tunjukkan gestur ASL di depan kamera")
+        st.caption("Prediksi diperbarui setiap beberapa frame")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
