@@ -14,14 +14,10 @@ import time
 import joblib
 from pathlib import Path
 
-import sys
-import types
-if 'cv2' not in sys.modules:
-    _cv2_mock = types.ModuleType('cv2')
-    _cv2_mock.__version__ = '0.0.0'
-    _cv2_mock.Mat = object
-    _cv2_mock.imdecode = lambda *a, **kw: None
-    sys.modules['cv2'] = _cv2_mock
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 st.set_page_config(page_title="ASL Recognition", layout="wide", page_icon="🤟")
 
@@ -164,7 +160,10 @@ elif "Webcam" in page:
     import av
 
     RTC_CONFIG = RTCConfiguration({
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+        ]
     })
 
     class ASLProcessor:
@@ -183,33 +182,34 @@ elif "Webcam" in page:
             self.cmap = load_class_map()
 
         def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-            self.init_once()
-            img = frame.to_ndarray(format="bgr24")
+            try:
+                self.init_once()
+                img = frame.to_ndarray(format="bgr24")
 
-            features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
-            if features is not None:
-                fs = self.scaler.transform(features.reshape(1, -1))
-                pm = self.model.predict(fs)[0]
-                pred = self.cmap['present_classes'][pm]
-                pmb = self.model.predict_proba(fs)[0]
-                label = CLASSES[pred]
-                conf = float(pmb[pm])
+                if self.detector is None:
+                    return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-                overlay = Image.fromarray(img[:, :, ::-1])
-                draw = ImageDraw.Draw(overlay)
-                draw.rectangle([(4, 4), (overlay.width - 5, 28)], fill=(0, 0, 0, 180))
-                color = (0, 255, 0) if conf >= 0.6 else (255, 200, 0)
-                draw.text((10, 8), f"{label}  {conf*100:.0f}%", fill=color)
-                img = np.array(overlay)[:, :, ::-1]
+                features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
+                if features is not None:
+                    fs = self.scaler.transform(features.reshape(1, -1))
+                    pm = self.model.predict(fs)[0]
+                    pred = self.cmap['present_classes'][pm]
+                    pmb = self.model.predict_proba(fs)[0]
+                    label = CLASSES[pred]
+                    conf = float(pmb[pm])
 
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
+                    overlay = Image.fromarray(img[:, :, ::-1])
+                    draw = ImageDraw.Draw(overlay)
+                    draw.rectangle([(4, 4), (overlay.width - 5, 28)], fill=(0, 0, 0, 180))
+                    color = (0, 255, 0) if conf >= 0.6 else (255, 200, 0)
+                    draw.text((10, 8), f"{label}  {conf*100:.0f}%", fill=color)
+                    img = np.array(overlay)[:, :, ::-1]
 
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
-    with col2:
-        st.markdown("### Petunjuk")
-        st.caption("Tunjukkan gestur ASL di depan kamera. Prediksi muncul sebagai overlay di video.")
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
+            except Exception:
+                return av.VideoFrame.from_ndarray(frame.to_ndarray(format="bgr24"), format="bgr24")
+
+    st.caption("Tunjukkan gestur ASL di depan kamera. Prediksi muncul sebagai overlay di video.")
 
     webrtc_streamer(
         key="asl-webcam",
