@@ -197,17 +197,24 @@ elif "Webcam" in page:
             _, enc = img_data.split(",", 1)
             frame = np.array(Image.open(io.BytesIO(__import__('base64').b64decode(enc))).convert('RGB'))
             st.image(frame, caption="Frame", width=240)
+            st.write(f"Frame shape: {frame.shape}, dtype: {frame.dtype}")
             detector = get_detector()
-            features = extract_landmarks_fast(frame, detector) if detector else None
-            if features is not None:
-                pred, probs = predict_landmarks(features, model_choice)
-                conf = probs[pred]
-                st.session_state.wc_last = (CLASSES[pred], conf)
-                st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
+            if detector is None:
+                st.error("Detector gagal dimuat")
             else:
-                st.warning("Tangan tidak terdeteksi")
+                features = extract_landmarks_fast(frame, detector)
+                st.write(f"Features: {features.shape if features is not None else 'None'}")
+                if features is not None:
+                    pred, probs = predict_landmarks(features, model_choice)
+                    conf = probs[pred]
+                    st.session_state.wc_last = (CLASSES[pred], conf)
+                    st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
+                else:
+                    st.warning("Tangan tidak terdeteksi")
         except Exception as e:
             st.error(f"Error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
     if st.session_state.wc_last:
         label, conf = st.session_state.wc_last
         st.caption(f"Prediksi terakhir: {label} ({conf*100:.1f}%)")
