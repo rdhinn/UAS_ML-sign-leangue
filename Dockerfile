@@ -13,4 +13,4 @@ EXPOSE 8501
 
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
-CMD env -u STREAMLIT_SERVER_PORT streamlit run app/app.py --server.port=8501 --server.address=0.0.0.0
+CMD python -c "import os; os.environ.pop('STREAMLIT_SERVER_PORT',None); os.execvp('streamlit',['streamlit','run','app/app.py','--server.port=8501','--server.address=0.0.0.0'])"
