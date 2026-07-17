@@ -8,7 +8,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import cv2
+import io
+from PIL import Image
 import time
 import joblib
 from pathlib import Path
@@ -89,10 +90,9 @@ def load_class_map():
 def load_models_for_webcam():
     return load_scaler(), load_xgboost(), load_class_map()
 
-def extract_landmarks_fast(image_bgr, detector):
+def extract_landmarks_fast(image_rgb, detector):
     import mediapipe as mp
-    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
     result = detector.detect(mp_image)
     if result.hand_landmarks:
         lm = result.hand_landmarks[0]
@@ -155,13 +155,11 @@ elif "Webcam" in page:
     img = st.camera_input("Ambil gambar")
 
     if img is not None:
-        bytes_data = img.getvalue()
-        nparr = np.frombuffer(bytes_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        frame = np.array(Image.open(io.BytesIO(img.getvalue())).convert('RGB'))
 
         col1, col2 = st.columns(2)
         with col1:
-            st.image(frame, channels="BGR", caption="Gambar dari webcam", width=320)
+            st.image(frame, caption="Gambar dari webcam", width=320)
 
         with col2:
             with st.spinner("Mendeteksi landmark tangan..."):
@@ -198,13 +196,11 @@ elif "Upload" in page:
     uploaded = st.file_uploader("Upload gambar", type=["jpg", "jpeg", "png"])
 
     if uploaded:
-        bytes_data = uploaded.getvalue()
-        nparr = np.frombuffer(bytes_data, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        img = np.array(Image.open(io.BytesIO(uploaded.getvalue())).convert('RGB'))
 
         col1, col2 = st.columns(2)
         with col1:
-            st.image(img, channels="BGR", caption="Input", width=320)
+            st.image(img, caption="Input", width=320)
 
         with col2:
             if st.button("🔮 Prediksi", type="primary"):
