@@ -166,14 +166,7 @@ elif "Webcam" in page:
     import av
 
     RTC_CONFIG = RTCConfiguration({
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {
-                "urls": ["turn:openrelay.metered.ca:80"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-        ]
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
     })
 
     if "pred_label" not in st.session_state:
@@ -187,7 +180,7 @@ elif "Webcam" in page:
             self.scaler = None
             self.model = None
             self.cmap = None
-            self.frame_no = 0
+            self.count = 0
 
         def init_once(self):
             if self.detector is not None:
@@ -199,51 +192,45 @@ elif "Webcam" in page:
 
         def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
             self.init_once()
+            self.count += 1
             img = frame.to_ndarray(format="bgr24")
-            self.frame_no += 1
 
-            if self.frame_no % 6 == 0:
-                rgb = img[:, :, ::-1]
-                features = extract_landmarks_fast(rgb, self.detector)
+            if self.count % 3 == 0:
+                features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
                 if features is not None:
                     fs = self.scaler.transform(features.reshape(1, -1))
                     pm = self.model.predict(fs)[0]
                     pred = self.cmap['present_classes'][pm]
                     pmb = self.model.predict_proba(fs)[0]
-                    confidence = pmb[pm]
                     st.session_state.pred_label = CLASSES[pred]
-                    st.session_state.pred_conf = float(confidence)
+                    st.session_state.pred_conf = float(pmb[pm])
                     st.session_state.hand_detected = True
                 else:
                     st.session_state.hand_detected = False
 
             return frame
 
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        webrtc_streamer(
-            key="asl-webcam",
-            mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTC_CONFIG,
-            media_stream_constraints={
-                "video": {"width": {"ideal": 320}, "height": {"ideal": 240}, "frameRate": {"ideal": 15}},
-                "audio": False,
-            },
-            video_processor_factory=ASLProcessor,
-            async_processing=True,
-        )
+    webrtc_streamer(
+        key="asl-webcam",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIG,
+        media_stream_constraints={
+            "video": {"width": {"ideal": 240}, "height": {"ideal": 180}},
+            "audio": False,
+        },
+        video_processor_factory=ASLProcessor,
+        async_processing=True,
+    )
 
-    with col2:
-        st.subheader("Hasil Prediksi")
-        if st.session_state.hand_detected:
-            conf = st.session_state.pred_conf
-            st.markdown(f"## {st.session_state.pred_label}")
-            st.metric("Confidence", f"{conf*100:.1f}%")
-            if conf < 0.6:
-                st.warning("Confidence rendah")
-        else:
-            st.info("Tunjukkan gestur ASL")
-            st.caption("Prediksi muncul otomatis saat tangan terdeteksi")
+    st.subheader("Hasil Prediksi")
+    if st.session_state.hand_detected:
+        conf = st.session_state.pred_conf
+        st.markdown(f"### {st.session_state.pred_label}")
+        st.metric("Confidence", f"{conf*100:.1f}%")
+        if conf < 0.6:
+            st.warning("Confidence rendah")
+    else:
+        st.info("Tunjukkan gestur ASL di depan kamera")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
