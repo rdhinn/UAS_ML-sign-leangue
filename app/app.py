@@ -14,6 +14,15 @@ import time
 import joblib
 from pathlib import Path
 
+import sys
+import types
+if 'cv2' not in sys.modules:
+    _cv2_mock = types.ModuleType('cv2')
+    _cv2_mock.__version__ = '0.0.0'
+    _cv2_mock.Mat = object
+    _cv2_mock.imdecode = lambda *a, **kw: None
+    sys.modules['cv2'] = _cv2_mock
+
 st.set_page_config(page_title="ASL Recognition", layout="wide", page_icon="🤟")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
