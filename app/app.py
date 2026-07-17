@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import cv2
 import time
 import joblib
-import os
 from pathlib import Path
 
 st.set_page_config(page_title="ASL Recognition", layout="wide", page_icon="🤟")
@@ -36,6 +35,26 @@ page = st.sidebar.radio("Navigasi", [
 st.sidebar.markdown("---")
 st.sidebar.info("UAS Machine Learning - ASL Alphabet Recognition")
 
+# ─── Singleton: MediaPipe Detector ────────────────────
+_mp_detector = None
+
+def get_detector():
+    global _mp_detector
+    if _mp_detector is not None:
+        return _mp_detector
+    import mediapipe as mp
+    from mediapipe.tasks.python import BaseOptions
+    from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+    model_path = str(BASE_DIR / "5_training/models/hand_landmarker.task")
+    if not Path(model_path).exists():
+        st.error(f"MediaPipe model not found: {model_path}")
+        return None
+    options = HandLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=model_path),
+        running_mode=RunningMode.IMAGE, num_hands=1, min_hand_detection_confidence=0.5)
+    _mp_detector = HandLandmarker.create_from_options(options)
+    return _mp_detector
+
 # ─── Load Models (cached) ──────────────────────────────
 @st.cache_resource
 def load_xgboost():
@@ -51,7 +70,9 @@ def load_mlp():
     import sys
     sys.path.insert(0, str(BASE_DIR / "5_training/code"))
     from train_landmark_mlp import LandmarkMLP
-    model = LandmarkMLP(num_classes=29)
+    cmap = load_class_map()
+    n_classes = len(cmap['present_classes'])
+    model = LandmarkMLP(num_classes=n_classes)
     model.load_state_dict(torch.load(
         str(BASE_DIR / "models/landmark_mlp.pth"),
         map_location="cpu", weights_only=True))
@@ -64,50 +85,48 @@ def load_class_map():
     with open(str(BASE_DIR / "models/class_map.pkl"), "rb") as f:
         return pickle.load(f)
 
-def extract_landmarks_from_image(image_bgr):
-    try:
-        import mediapipe as mp
-        from mediapipe.tasks.python import BaseOptions
-        from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
-        model_path = str(BASE_DIR / "models/hand_landmarker.task")
-        if not Path(model_path).exists():
-            return None
-        options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=model_path),
-            running_mode=RunningMode.IMAGE, num_hands=1, min_hand_detection_confidence=0.3)
-        detector = HandLandmarker.create_from_options(options)
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        import mediapipe as mp
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = detector.detect(mp_image)
-        detector.close()
-        if result.hand_landmarks:
-            lm = result.hand_landmarks[0]
-            return np.array([(p.x, p.y, p.z) for p in lm], dtype=np.float32).flatten()
-    except Exception as e:
-        st.warning(f"MediaPipe error: {e}")
+@st.cache_resource
+def load_models_for_webcam():
+    return load_scaler(), load_xgboost(), load_class_map()
+
+def extract_landmarks_fast(image_bgr, detector):
+    import mediapipe as mp
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    result = detector.detect(mp_image)
+    if result.hand_landmarks:
+        lm = result.hand_landmarks[0]
+        return np.array([(p.x, p.y, p.z) for p in lm], dtype=np.float32).flatten()
     return None
 
 def predict_landmarks(features, model_type="XGBoost"):
     scaler = load_scaler()
     features_scaled = scaler.transform(features.reshape(1, -1))
+    cmap = load_class_map()
     if model_type == "XGBoost":
         model = load_xgboost()
-        pred = model.predict(features_scaled)[0]
-        probs = model.predict_proba(features_scaled)[0]
+        pred_mapped = model.predict(features_scaled)[0]
+        pred = cmap['present_classes'][pred_mapped]
+        probs_mapped = model.predict_proba(features_scaled)[0]
+        probs = np.zeros(29)
+        for i, cls in enumerate(cmap['present_classes']):
+            probs[cls] = probs_mapped[i]
     else:
         model = load_mlp()
         import torch
         with torch.no_grad():
             out = model(torch.from_numpy(features_scaled))
-            pred = out.argmax(1).item()
-            probs = torch.softmax(out, dim=1)[0].numpy()
+            pred_mapped = out.argmax(1).item()
+            pred = cmap['present_classes'][pred_mapped]
+            probs_mapped = torch.softmax(out, dim=1)[0].numpy()
+            probs = np.zeros(29)
+            for i, cls in enumerate(cmap['present_classes']):
+                probs[cls] = probs_mapped[i]
     return pred, probs
 
 # ─── PAGE 1: DASHBOARD EDA ─────────────────────────────
 if "Dashboard" in page:
     st.title("📊 Dashboard EDA - ASL Alphabet Dataset")
-
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Gambar", "87.028")
     col2.metric("Jumlah Kelas", "29")
@@ -115,7 +134,6 @@ if "Dashboard" in page:
     col4.metric("Model Terbaik", "XGBoost 93.9%")
 
     tab1, tab2, tab3 = st.tabs(["Distribusi Kelas", "Sample Gambar", "Ringkasan"])
-
     with tab1:
         st.image(str(BASE_DIR / "1_eksplorasi_dataset/images/class_distribution.png"),
                  caption="Distribusi 29 kelas ASL", use_container_width=True)
@@ -125,52 +143,94 @@ if "Dashboard" in page:
     with tab3:
         st.image(str(BASE_DIR / "1_eksplorasi_dataset/images/dataset_info.png"),
                  caption="Informasi dataset", use_container_width=True)
-
     st.subheader("Analisis Landmark")
     st.image(str(BASE_DIR / "reports/eda_summary.png"), use_container_width=True)
 
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
-    st.title("🧪 Webcam Demo - Prediksi Real-time")
-    st.markdown("Ambil gambar dari webcam browser untuk prediksi ASL.")
+    st.title("🧪 Webcam Real-time - ASL Prediction")
+    st.markdown("Webcam langsung dengan deteksi gestur ASL via MediaPipe.")
 
     model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"])
-    img = st.camera_input("Ambil gambar")
 
-    if img is not None:
-        bytes_data = img.getvalue()
-        nparr = np.frombuffer(bytes_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+    import av
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(frame, channels="BGR", caption="Gambar dari webcam", width=320)
+    RTC_CONFIG = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-        with col2:
-            with st.spinner("Mendeteksi landmark tangan..."):
-                features = extract_landmarks_from_image(frame)
+    _frame_count = 0
 
-            if features is not None:
-                pred, probs = predict_landmarks(features, model_choice)
-                label = CLASSES[pred]
-                confidence = probs[pred]
+    class ASLProcessor:
+        def __init__(self):
+            self.detector = None
+            self.scaler = None
+            self.model = None
+            self.cmap = None
+            self.frame_no = 0
+            self.last_label = ""
+            self.last_conf = 0.0
+            self.last_hand = False
 
-                st.success(f"**Prediksi: {label}**")
-                st.metric("Confidence", f"{confidence*100:.1f}%",
-                          delta=f"{'High' if confidence>0.7 else 'Low'} confidence")
+        def init_once(self):
+            if self.detector is not None:
+                return
+            self.detector = get_detector()
+            self.scaler = load_scaler()
+            self.model = load_xgboost()
+            self.cmap = load_class_map()
 
-                if confidence < 0.6:
-                    st.warning("Confidence rendah — coba dengan pencahayaan lebih baik")
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+            self.init_once()
 
-                st.write("**Top-3 Prediksi:**")
-                top3 = np.argsort(probs)[-3:][::-1]
-                for i, idx in enumerate(top3):
-                    pct = probs[idx] * 100
-                    bar = "█" * int(pct / 5)
-                    st.write(f"{i+1}. **{CLASSES[idx]}**: {pct:.1f}% {bar}")
+            img = frame.to_ndarray(format="bgr24")
+            self.frame_no += 1
+
+            # Process every 3rd frame; use last result on others
+            if self.frame_no % 3 == 0:
+                features = extract_landmarks_fast(img, self.detector)
+
+                if features is not None:
+                    fs = self.scaler.transform(features.reshape(1, -1))
+                    pm = self.model.predict(fs)[0]
+                    pred = self.cmap['present_classes'][pm]
+                    pmb = self.model.predict_proba(fs)[0]
+                    confidence = pmb[pm]
+                    self.last_label = CLASSES[pred]
+                    self.last_conf = confidence
+                    self.last_hand = True
+                else:
+                    self.last_hand = False
+
+            # Always draw from last known result (no flicker)
+            if self.last_hand:
+                color = (0, 255, 0) if self.last_conf >= 0.6 else (0, 165, 255)
+                cv2.putText(img, f"{self.last_label}", (20, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 2.5, color, 4)
+                cv2.putText(img, f"{self.last_conf*100:.1f}%", (20, 120),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+                if self.last_conf < 0.6:
+                    cv2.putText(img, "(low conf)", (20, 155),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
             else:
-                st.error("Tidak ada tangan terdeteksi. Coba posisikan tangan di depan kamera.")
-                st.info("Tips: gunakan background polos, pencahayaan cukup, tangan di tengah frame.")
+                cv2.putText(img, "No hand", (20, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+    col_left, col_mid, col_right = st.columns([0.4, 2.2, 0.4])
+    with col_mid:
+        webrtc_streamer(
+            key="asl-webcam",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTC_CONFIG,
+            media_stream_constraints={
+                "video": {"width": {"ideal": 1280}, "height": {"ideal": 720}, "frameRate": {"ideal": 30}},
+                "audio": False,
+            },
+            video_processor_factory=ASLProcessor,
+            async_processing=True,
+        )
+    st.info("💡 Klik 'Start' dan ijinkan akses kamera. Tunjukkan gestur ASL di depan kamera.")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
@@ -192,27 +252,25 @@ elif "Upload" in page:
         with col2:
             if st.button("🔮 Prediksi", type="primary"):
                 with st.spinner("Mendeteksi landmark..."):
-                    features = extract_landmarks_from_image(img)
+                    detector = get_detector()
+                    if detector:
+                        features = extract_landmarks_fast(img, detector)
+                    else:
+                        features = None
 
                 if features is not None:
                     pred, probs = predict_landmarks(features, model_choice)
-                    label = CLASSES[pred]
-                    confidence = probs[pred]
-
-                    st.success(f"**Hasil: {label}**")
-                    st.metric("Confidence", f"{confidence*100:.1f}%")
-
+                    st.success(f"**Hasil: {CLASSES[pred]}**")
+                    st.metric("Confidence", f"{probs[pred]*100:.1f}%")
                     top3 = np.argsort(probs)[-3:][::-1]
                     st.write("**Top-3:**")
                     for i, idx in enumerate(top3):
                         st.write(f"{i+1}. {CLASSES[idx]}: {probs[idx]*100:.1f}%")
                 else:
                     st.error("Tangan tidak terdeteksi. Coba gambar lain.")
-                    st.info("Atau gunakan input manual landmark di bawah.")
 
         st.divider()
         st.subheader("Atau input landmark manual (63 nilai)")
-        st.caption("Format: x1,y1,z1,x2,y2,z2,...,x21,y21,z21 (dipisah koma)")
         manual_input = st.text_area("Landmark (63 angka comma-separated)", height=80,
                                     placeholder="0.5,0.3,0.1,0.6,0.35,0.12,...")
         if manual_input and st.button("Prediksi Manual"):
@@ -304,8 +362,6 @@ elif "Interpretasi" in page:
     st.subheader("Kesimpulan")
     st.success("""
     **Model terbaik: XGBoost** dengan F1-Score 92.88% pada landmark features.
-    Pendekatan landmark-based lebih robust daripada CNN pixel-based
-    karena invariant terhadap background dan pencahayaan.
     """)
 
 # ─── PAGE 6: DOKUMENTASI ───────────────────────────────
@@ -314,8 +370,7 @@ elif "Dokumentasi" in page:
 
     st.header("Dataset")
     st.markdown("""
-    - **ASL Alphabet** dari Kaggle
-    - 87.028 gambar, 29 kelas (A-Z, del, nothing, space)
+    - **ASL Alphabet** dari Kaggle — 87.028 gambar, 29 kelas (A-Z, del, nothing, space)
     - Ukuran 200×200 pixel, grayscale
     - [Link Dataset](https://www.kaggle.com/datasets/grassknoted/asl-alphabet)
     """)
@@ -324,28 +379,20 @@ elif "Dokumentasi" in page:
     st.markdown("""
     1. **Feature Extraction** — MediaPipe HandLandmarker (21 landmarks × 3 koordinat = 63 fitur)
     2. **Preprocessing** — Filter undetected, StandardScaler, stratified split
-    3. **Modeling** — Logistic Regression, Random Forest, XGBoost, MLP
-    4. **Tuning** — Optuna untuk Random Forest
-    5. **Interpretasi** — SHAP, Feature Importance, Confusion Matrix
+    3. **Modeling** — Logistic Regression, Random Forest, XGBoost, MLP + Optuna tuning
+    4. **Interpretasi** — SHAP, Feature Importance, Confusion Matrix
     """)
 
     st.header("Hasil")
     st.markdown("""
-    - **XGBoost**: Accuracy 93.85%, F1 92.88% (model terbaik)
+    - **XGBoost**: Accuracy 93.85%, F1 92.88%
     - **Landmark MLP**: Accuracy 93.89%, F1 92.08%
-    - **Random Forest**: Accuracy 90.76%, F1 90.05%
-    - **Logistic Regression**: Accuracy 90.65%, F1 89.00%
     """)
 
     st.header("Cara Deploy")
     st.code("""
-    # 1. Clone repo
     git clone https://github.com/rdhinn/UAS_ML-sign-leangue.git
     cd UAS_ML-sign-leangue
-
-    # 2. Install dependencies
     pip install -r requirements.txt
-
-    # 3. Jalankan Streamlit
     streamlit run app/app.py
     """, language="bash")

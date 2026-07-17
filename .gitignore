@@ -18,3 +18,4 @@ data/test/
 !models/xgb_model.pkl
 !models/scaler.pkl
 !models/class_map.pkl
+!5_training/models/hand_landmarker.task
