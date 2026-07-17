@@ -200,7 +200,7 @@ elif "Webcam" in page:
     </script>
     """
 
-    img_data = components.html(html_code, height=420, key="webcam-live")
+    img_data = components.html(html_code, height=420)
 
     if img_data and isinstance(img_data, str) and img_data.startswith('data:image'):
         _, encoded = img_data.split(",", 1)
