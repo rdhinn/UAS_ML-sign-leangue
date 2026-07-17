@@ -16,14 +16,12 @@ from pathlib import Path
 
 import sys
 import types
-
-class _Cv2Proxy(types.ModuleType):
-    def __getattr__(self, name):
-        return _Cv2Proxy(f"cv2.{name}")
-
 if 'cv2' not in sys.modules:
-    sys.modules['cv2'] = _Cv2Proxy('cv2')
-    sys.modules['cv2'].__version__ = '0.0.0'
+    _cv2_mock = types.ModuleType('cv2')
+    _cv2_mock.__version__ = '0.0.0'
+    _cv2_mock.Mat = object
+    _cv2_mock.imdecode = lambda *a, **kw: None
+    sys.modules['cv2'] = _cv2_mock
 
 st.set_page_config(page_title="ASL Recognition", layout="wide", page_icon="🤟")
 
@@ -159,90 +157,36 @@ if "Dashboard" in page:
 
 # ─── PAGE 2: WEBCAM DEMO ───────────────────────────────
 elif "Webcam" in page:
-    st.title("🧪 Webcam Real-time - ASL Prediction")
-    st.markdown("Streaming langsung — gestur ASL diprediksi otomatis.")
+    st.title("🧪 Webcam - ASL Prediction")
+    st.markdown("Ambil gambar gestur ASL — prediksi muncul instan.")
 
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-    import av
+    model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
 
-    with st.status("Memuat model...", expanded=True) as status:
-        _detector = get_detector()
-        _scaler = load_scaler()
-        _model = load_xgboost()
-        _cmap = load_class_map()
-        if _detector is not None:
-            st.success(f"MediaPipe HandLandmarker siap")
+    if "wc_last" not in st.session_state:
+        st.session_state.wc_last = None
+
+    img_input = st.camera_input("Ambil gestur ASL", key="wc_cam")
+
+    if img_input is not None:
+        frame = np.array(Image.open(io.BytesIO(img_input.getvalue())).convert('RGB'))
+        detector = get_detector()
+        if detector:
+            features = extract_landmarks_fast(frame, detector)
+            if features is not None:
+                pred, probs = predict_landmarks(features, model_choice)
+                conf = probs[pred]
+                st.session_state.wc_last = (CLASSES[pred], conf)
+                st.success(f"**{CLASSES[pred]}** — {conf*100:.1f}%")
+                if conf < 0.6:
+                    st.warning("Confidence rendah, coba pencahayaan lebih baik")
+            else:
+                st.warning("Tangan tidak terdeteksi")
         else:
-            st.error("MediaPipe detector gagal dimuat — cek path model")
-        st.success(f"XGBoost siap ({len(_cmap['present_classes'])} kelas)")
-        status.update(label="Model siap", state="complete")
+            st.error("Detector gagal dimuat")
 
-    RTC_CONFIG = RTCConfiguration({
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-        ]
-    })
-
-    _frame_count = 0
-
-    class ASLProcessor:
-        def __init__(self):
-            self.detector = _detector
-            self.scaler = _scaler
-            self.model = _model
-            self.cmap = _cmap
-            self.fc = 0
-
-        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-            self.fc += 1
-            try:
-                img = frame.to_ndarray(format="bgr24")
-                h, w = img.shape[:2]
-
-                overlay = Image.fromarray(img[:, :, ::-1])
-                draw = ImageDraw.Draw(overlay)
-
-                if self.detector is not None:
-                    features = extract_landmarks_fast(img[:, :, ::-1], self.detector)
-                    if features is not None:
-                        fs = self.scaler.transform(features.reshape(1, -1))
-                        pm = self.model.predict(fs)[0]
-                        pred = self.cmap['present_classes'][pm]
-                        pmb = self.model.predict_proba(fs)[0]
-                        label = CLASSES[pred]
-                        conf = float(pmb[pm])
-                        draw.rectangle([(4, 4), (w - 5, 28)], fill=(0, 0, 0, 180))
-                        color = (0, 255, 0) if conf >= 0.6 else (255, 200, 0)
-                        draw.text((10, 8), f"{label}  {conf*100:.0f}%", fill=color)
-                    else:
-                        draw.rectangle([(4, 4), (w - 5, 28)], fill=(0, 0, 0, 180))
-                        draw.text((10, 8), "No hand detected", fill=(200, 200, 200))
-                else:
-                    draw.rectangle([(4, 4), (w - 5, 28)], fill=(0, 0, 0, 180))
-                    draw.text((10, 8), "Detector not ready", fill=(255, 100, 100))
-
-                draw.text((w - 80, 8), f"#{self.fc}", fill=(180, 180, 180))
-                img = np.array(overlay)[:, :, ::-1]
-                return av.VideoFrame.from_ndarray(img, format="bgr24")
-            except Exception:
-                return av.VideoFrame.from_ndarray(frame.to_ndarray(format="bgr24"), format="bgr24")
-
-    st.caption("Tunjukkan gestur ASL di depan kamera. Prediksi muncul sebagai overlay di video.")
-
-    webrtc_streamer(
-        key="asl-webcam",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={
-            "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
-            "audio": False,
-        },
-        video_processor_factory=ASLProcessor,
-        async_processing=True,
-    )
-
-    st.info("Tips: Pastikan tangan terlihat jelas, pencahayaan cukup, dan gestur menghadap kamera.")
+    if st.session_state.wc_last and img_input is None:
+        label, conf = st.session_state.wc_last
+        st.info(f"Klik kamera untuk prediksi baru. Terakhir: **{label}** ({conf*100:.1f}%)")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
