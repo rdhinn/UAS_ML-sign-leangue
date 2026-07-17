@@ -160,7 +160,7 @@ elif "Webcam" in page:
     st.title("🧪 Webcam Real-time - ASL Prediction")
     st.markdown("Streaming langsung — gestur ASL diprediksi otomatis.")
 
-    model_choice = st.selectbox("Model", ["XGBoost", "Landmark MLP"], key="wc_model")
+    _wc_result = {"label": "", "conf": 0.0, "hand": False}
 
     from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
     import av
@@ -168,11 +168,6 @@ elif "Webcam" in page:
     RTC_CONFIG = RTCConfiguration({
         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
     })
-
-    if "pred_label" not in st.session_state:
-        st.session_state.pred_label = ""
-        st.session_state.pred_conf = 0.0
-        st.session_state.hand_detected = False
 
     class ASLProcessor:
         def __init__(self):
@@ -202,11 +197,11 @@ elif "Webcam" in page:
                     pm = self.model.predict(fs)[0]
                     pred = self.cmap['present_classes'][pm]
                     pmb = self.model.predict_proba(fs)[0]
-                    st.session_state.pred_label = CLASSES[pred]
-                    st.session_state.pred_conf = float(pmb[pm])
-                    st.session_state.hand_detected = True
+                    _wc_result["label"] = CLASSES[pred]
+                    _wc_result["conf"] = float(pmb[pm])
+                    _wc_result["hand"] = True
                 else:
-                    st.session_state.hand_detected = False
+                    _wc_result["hand"] = False
 
             return frame
 
@@ -222,15 +217,19 @@ elif "Webcam" in page:
         async_processing=True,
     )
 
-    st.subheader("Hasil Prediksi")
-    if st.session_state.hand_detected:
-        conf = st.session_state.pred_conf
-        st.markdown(f"### {st.session_state.pred_label}")
-        st.metric("Confidence", f"{conf*100:.1f}%")
-        if conf < 0.6:
-            st.warning("Confidence rendah")
-    else:
-        st.info("Tunjukkan gestur ASL di depan kamera")
+    @st.fragment(run_every=1.0)
+    def show_prediction():
+        st.subheader("Hasil Prediksi")
+        if _wc_result["hand"]:
+            conf = _wc_result["conf"]
+            st.markdown(f"### {_wc_result['label']}")
+            st.metric("Confidence", f"{conf*100:.1f}%")
+            if conf < 0.6:
+                st.warning("Confidence rendah")
+        else:
+            st.info("Tunjukkan gestur ASL di depan kamera")
+
+    show_prediction()
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
