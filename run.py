@@ -9,7 +9,7 @@ os.environ["STREAMLIT_SERVER_PORT"] = str(port)
 from streamlit.web import bootstrap
 
 if __name__ == "__main__":
-    bootstrap.run("app/app.py", "", flag_options={
+    bootstrap.run("app/app.py", "", [], flag_options={
         "server.port": port,
         "server.address": "0.0.0.0",
     })
