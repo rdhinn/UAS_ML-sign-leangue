@@ -196,6 +196,7 @@ elif "Webcam" in page:
         try:
             _, enc = img_data.split(",", 1)
             frame = np.array(Image.open(io.BytesIO(__import__('base64').b64decode(enc))).convert('RGB'))
+            st.image(frame, caption="Frame", width=240)
             detector = get_detector()
             features = extract_landmarks_fast(frame, detector) if detector else None
             if features is not None:
@@ -207,9 +208,9 @@ elif "Webcam" in page:
                 st.warning("Tangan tidak terdeteksi")
         except Exception as e:
             st.error(f"Error: {e}")
-    elif st.session_state.wc_last:
+    if st.session_state.wc_last:
         label, conf = st.session_state.wc_last
-        st.info(f"Menunggu gestur... Prediksi terakhir: {label} ({conf*100:.1f}%)")
+        st.caption(f"Prediksi terakhir: {label} ({conf*100:.1f}%)")
 
 # ─── PAGE 3: UPLOAD & PREDIKSI ─────────────────────────
 elif "Upload" in page:
